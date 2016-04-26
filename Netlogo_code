@@ -1,0 +1,492 @@
+extensions [ gis csv ]
+breed [ people person ] 
+breed [ nodes node ]
+breed [ vertices vertex ]
+people-own [ zone sex age qhealth car ed NSSEC numdu98 brush highsug count-down to-node speed cur-link target destination destination-entrance mynode step-in-path mypath last-stop]
+globals [ csv filelist sheffield-east-dataset building-dataset road-dataset dentist-dataset shop-dataset FE-dataset centroid-dataset master-pointset got_to_destination test-point]
+patches-own [ name CODE mean_dmft is-road? entrance]
+vertices-own [ myneighbors dist done lastnode]
+
+;;-------------------------------------------- Setup/go procedures ---------------------------------------------------------
+
+to startup
+  read-gis-datasets
+end
+
+to setup
+  clear-all-but-globals
+  ask patches [set pcolor white]
+  setup-world-envelope
+  ;import-drawing "U:\\ManWin\\My Documents\\shef_background.jpg"
+  draw-world
+  createPeople
+  setup-vertices
+  ;road-function ; NEW FUNCTION FOR RECOGNISING THE ROADS ON THE MAP - PATCH BASED
+  ;road-function2 ; NEW FUNCTION FOR RECOGNISING THE ROADS ON THE MAP - LINK/NODE BASED 
+  ;assign-area-values
+  display-dentist-points
+  display-test-point
+  add-features
+  ;setup-paths-graph ; SEEMS TO WORK - USE INSTEAD OF 'ROAD-FUNCTION2', WHILE ALSO USING 'SETUP-PEOPLE'
+  add-to-path
+  ;setup-people
+  ;ask turtles 
+  ;[;setxy random-xcor random-ycor  set size 0.5
+    ;set count-down 15
+  ;]   
+;  ask people [
+;  set target one-of patches with [pcolor = orange]
+;  face target
+;  ]
+  ;reset ticks
+  monitor-teeth
+end
+
+to go
+  move
+  ;move-to-road
+  ;move-on-road
+  ;ask people [move-person speed]
+  ;move-bounce
+  tick
+  if ticks >= 1000 [stop]
+end
+  
+;;--------------------------------------- GIS related procedures -----------------------------------------------------------------
+
+to read-gis-datasets
+  set sheffield-east-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\Sheffield_east.shp"
+  set building-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\Sheffield_east_buildings.shp"
+  set road-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\Sheffield_east_roads_buffer.shp" ; split roads up based on type? - I.e. like on OS maps
+  set dentist-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\Sheffield_east_dentists.shp"
+  set shop-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\Sheffield_east_shops.shp"
+  set FE-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\Sheffield_east_FE.shp"
+  ;set centroid-dataset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\polygon_centroids.shp"
+  ;set master-pointset gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\master_location_dataset.shp"
+  set test-point gis:load-dataset "U:\\ManWin\\My Documents\\Netlogo\\Sheffield east model\\test_point.shp"
+  
+end
+
+to setup-world-envelope
+  gis:set-world-envelope gis:envelope-of sheffield-east-dataset
+end
+
+to draw-world
+  ;gis:set-drawing-color [230 230 230]    gis:fill sheffield-dataset 0 ; can just write colour name if easier
+  ;gis:set-drawing-color [  0   0   0]    gis:draw sheffield-east-dataset 1
+  ;gis:set-drawing-color [102 204 25]    gis:fill point-dataset 0
+  ;gis:set-drawing-color orange    gis:draw dentist-dataset 1
+  gis:set-drawing-color orange    gis:fill dentist-dataset 1
+  ;gis:set-drawing-color grey   gis:fill building-dataset 0
+  gis:set-drawing-color grey    gis:draw building-dataset 1 
+  ;gis:set-drawing-color [102 204 255]    gis:fill road-dataset 0
+  gis:set-drawing-color [  0   0 255]    gis:draw road-dataset 1
+  ;gis:set-drawing-color pink    gis:draw shop-dataset 1
+  gis:set-drawing-color pink    gis:fill shop-dataset 1
+  ;gis:set-drawing-color red  gis:draw centroid-dataset 1
+  ;gis:set-drawing-color red  gis:fill centroid-dataset 1
+  ;gis:set-drawing-color green gis:draw FE-dataset 1
+  gis:set-drawing-color green gis:fill FE-dataset 1
+  ;gis:set-drawing-color green gis:draw master-pointset 1
+  ;gis:set-drawing-color green gis:fill master-pointset 1
+  ;gis:set-drawing-color orange gis:draw test-point 1 
+  gis:set-drawing-color orange gis:fill test-point 1 
+end
+
+;;------------------------------------------------- one-liners ---------------------------------------------------------------------------
+
+to clear-all-but-globals reset-ticks ct cp cd clear-links clear-all-plots clear-output end
+  
+;;---------------------------------- Importing the place based data ----------------------------------------------------------------------
+
+to display-dentist-points
+  ask patches [set pcolor white]
+  ask patches gis:intersecting dentist-dataset
+  [set pcolor orange]
+end ; repeat this for FE and shop locations...
+
+to display-test-point
+  ask patches [set pcolor white]
+  ask patches gis:intersecting test-point
+  [set pcolor orange]
+end ; repeat this for FE and shop locations...
+
+to assign-area-values
+  foreach gis:feature-list-of sheffield-east-dataset
+  [
+    show gis:property-value ? "CODE"
+    gis:set-drawing-color scale-color red (gis:property-value ? "MEAN_DMFT_") 500 0
+    gis:FILL ? 1.0
+    
+    ask patches [
+      if gis:intersects? ? self[
+        set mean_dmft gis:property-value ? "MEAN_DMFT_"
+        set code gis:property-value ? "CODE"
+      ]
+    ]
+  ]
+end ; could be used to read in the other place based variables too
+
+;;----------------------------------------------- Road based procedures -------------------------------------------------------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; roads based on intersection with patches ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to road-function
+ask patches [ set is-road? false ]
+ask patches gis:intersecting road-dataset
+[ set is-road? true ]
+end ; NEW FUNCTION MENTIONED EARLIER - BASED ON INTERSECTING WITH THE PATCHES
+
+to road-function2
+  foreach gis:feature-list-of road-dataset
+  [ foreach gis:vertex-lists-of ?
+    [ let previous-node nobody
+      foreach ?
+      [ let location gis:location-of ?
+        if not empty? location
+        [ create-nodes 1
+          [ set xcor item 0 location
+            set ycor item 1 location
+            if previous-node != nobody
+            [ create-link-with previous-node ]
+            set hidden? true
+            set previous-node self ] ] ] ]
+  ]
+end ; SECOND NEW FUNCTION - BASED ON CREATING A NETWORK OF LINKS BASED ON THE LOCATION OF THE R
+
+to move-to-road
+  ask people with [ any? neighbors with [pcolor = 9.9 ]] [move-to one-of patches with [is-road?]]
+end
+
+to move-on-road ; BASED ON THE PATCHES NETWORK FOR ROADS
+  ask people with [ any? neighbors with [is-road?] ] [ move-to one-of neighbors with [is-road?] ] 
+  ask people
+    [ifelse ed = "Degree OH"
+   [ face min-one-of patches with [ pcolor = orange ] [ distance myself ] forward 1]
+    [ forward 1 right random 1 set numdu98 numdu98 + 0.1 ]]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; roads based on nodes and links ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to setup-paths-graph
+  set-default-shape nodes "circle"
+  foreach polylines-of road-dataset node-precision [
+    (foreach butlast ? butfirst ? [ if ?1 != ?2 [ ;; skip nodes on top of each other due to rounding
+      let n1 new-node-at first ?1 last ?1
+      let n2 new-node-at first ?2 last ?2
+      ask n1 [create-link-with n2]
+    ]])
+  ]
+  ask nodes [hide-turtle]
+end
+
+to-report polylines-of [dataset decimalplaces]
+  let polylines gis:feature-list-of dataset                              ;; start with a features list
+  set polylines map [first ?] map [gis:vertex-lists-of ?] polylines      ;; convert to virtex lists
+  set polylines map [map [gis:location-of ?] ?] polylines                ;; convert to netlogo float coords.
+  set polylines remove [] map [remove [] ?] polylines                    ;; remove empty poly-sets .. not visible
+  set polylines map [map [map [precision ? decimalplaces] ?] ?] polylines        ;; round to decimalplaces
+    ;; note: probably should break polylines with empty coord pairs in the middle of the polyline
+  report polylines ;; Note: polylines with a few off-world points simply skip them.
+end
+;
+to-report new-node-at [x y] ; returns a node at x,y creating one if there isn't one there.
+  let n nodes with [xcor = x and ycor = y]
+  ifelse any? n [set n one-of n] [create-nodes 1 [setxy x y set size 2 set n self]]
+  report n
+end
+
+to-report meters-per-patch ;; maybe should be in gis: extension?
+  let world gis:world-envelope ; [ minimum-x maximum-x minimum-y maximum-y ]
+  let x-meters-per-patch (item 1 world - item 0 world) / (max-pxcor - min-pxcor)
+  let y-meters-per-patch (item 3 world - item 2 world) / (max-pycor - min-pycor)
+  report mean list x-meters-per-patch y-meters-per-patch
+end
+
+to setup-people
+  set-default-shape people "person"
+  let person-size person-meters / meters-per-patch
+  let max-speed  (max-speed-km/h / 36) / meters-per-patch
+  let min-speed  max-speed * (1 - speed-variation) ;; max-speed - (max-speed * speed-variation)
+  create-people num-people [
+    set size person-size ;; use meters-per-patch??
+    set speed min-speed + random-float (max-speed - min-speed)
+    let l one-of links
+    set-next-person-link l [end1] of l
+  ]
+end
+;to move-person [dist] ;; boat proc
+;  let dxnode distance to-node
+;  ifelse dxnode > dist [forward dist] [
+;    let nextlinks [my-links] of to-node
+;    ifelse count nextlinks = 1
+;    [ set-next-person-link cur-link to-node ]
+;    [ set-next-person-link one-of nextlinks with [self != [cur-link] of myself] to-node ]
+;    move-person dist - dxnode
+;  ]
+;end
+to set-next-person-link [l n] ;; boat proc
+  set cur-link l
+  move-to n
+  ifelse n = [end1] of l [set to-node [end2] of l] [set to-node [end1] of l]
+  face to-node
+end
+to toggle-people
+  ifelse mean [size] of people = person-meters
+  [ ask people [set size size / meters-per-patch set speed speed / meters-per-patch ] ]
+  [ ask people [set size person-meters set speed speed * meters-per-patch ] ]
+end
+
+;;--------------------------------------------------- people creating procedures ---------------------------------------------------------------
+
+to createPeople
+  
+  ;clear-all
+  
+  create-people 100 [ set color pink set shape "person" set count-down 15 ]
+  
+  file-open "U:\\ManWin\\My Documents\\Netlogo\\ints_df_mini.csv" ; file-open "C:\\Users\\dental\\Documents\\microdata_mini.csv"
+  while [not file-at-end? ][
+    
+    set csv file-read-line
+    set csv word csv ","
+    
+    set filelist []
+    
+    while [ not empty? csv][
+      let $x position "," csv
+      let $item substring csv 0 $x
+    
+         carefully [set $item read-from-string $item][]
+         set filelist lput $item filelist
+         set csv substring csv ($x + 1) length csv
+    ]
+    
+    ask person item 1 filelist[
+      set zone item 2 filelist
+      set sex item  3 filelist
+      set age item 4 filelist
+      set qhealth item 5 filelist
+      set car item 6 filelist
+      set ed item 7 filelist
+      set nssec item 8 filelist
+      set numdu98 item 9 filelist
+    ]
+  ]
+;  ask people [
+;    if zone = 1
+;    [setxy 529 513
+;    ]
+;  ]   ; create a point datafile with a key for each point - then tell people to start on the point which matches to their key...?
+file-close-all
+display
+end
+
+to add-to-path
+  ask people [
+    let l one-of links
+    set-next-person-link l [end1] of l
+  ]
+end
+
+to add-features
+  ask people [set destination nobody set last-stop nobody
+                                         set mynode one-of nodes ]
+end
+    
+
+;;------------------------------------------------ Movement procedures -----------------------------------------------------------------------------
+
+to move-bounce
+  ask people [
+    if distance target = 0
+    [set target one-of patches with [pcolor = orange]
+      face target]
+    ifelse distance target < 1
+    [ move-to target ]
+    [
+      ifelse ed = "Degree OH"
+      [fd 2] ; make a 'speed' slider so you can vary this? 
+      [fd 1]
+  ]
+  ]
+  ;waiting
+  tick
+end
+
+;;--------------------------------------------------- old procedures -------------------------------------------------------------------------------------
+
+to direct-people
+    ask people
+    [ifelse ed = "Degree OH"
+   [ face min-one-of patches with [ pcolor = orange ] [ distance myself ] forward 1]
+    [ forward 1 right random 1 set numdu98 numdu98 + 0.1 ]]
+    ask people [
+    ifelse pcolor = orange[
+    set count-down count-down - 1
+    set label count-down
+    if count-down = 0
+    [ fd 1
+      set label ""
+      reset-count-down
+    ]
+    ]
+    [rt random 90
+     fd 1
+    ]
+    ]
+end ;; DO YOU NEED TO PUT THIS INTO A LOOP IN ORDER TO BE ABLE TO APPLY THE 'STOP' FUNCTION?
+
+To continue   
+  rt random 90
+  fd 1 
+end
+
+to stay   
+  set count-down count-down - 1   ;decrement-timer
+  set label count-down    
+  if count-down = 0 
+    [
+     continue
+      set label ""
+      reset-count-down
+    ]    
+end
+
+to reset-count-down   
+  set count-down 15 
+end
+
+;;-------------------------------------- mean dmft monitor (attempt) ---------------------------------------------------------------------------------------------
+
+to monitor-teeth
+  ask people [ show numdu98]
+  show sum [numdu98] of people
+end
+
+
+
+
+
+
+
+
+to setup-vertices
+foreach gis:feature-list-of road-dataset[
+  
+  foreach gis:vertex-lists-of ? ; for the road feature, get the list of vertices
+       [
+        let previous-node-pt nobody
+        
+        foreach ?  ; for each vertex in road segment feature
+         [ 
+          let location gis:location-of ?
+          if not empty? location
+           [
+            ;ifelse any? vertices with [(xcor = item 0 location and ycor = item 1 location) ] ; if there is not a road-vertex here already
+             ;[]
+             ;[
+             create-vertices 1
+               [set myneighbors n-of 0 turtles ;;empty
+                set xcor item 0 location
+                set ycor item 1 location
+                set size 0.2
+                set shape "circle"
+                set color brown
+                set hidden? true
+      
+     
+              ;; create link to previous node
+              ifelse previous-node-pt = nobody
+                 [] ; first vertex in feature
+                 [create-link-with previous-node-pt] ; create link to previous node  
+                  set previous-node-pt self]
+               ;]
+           ]]] ]
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+to move
+  
+  ;;pick a destination if it does not have any yet
+  ask people [
+    if destination = nobody [
+       ask people [
+       set destination one-of patches with [pcolor = orange]
+       set destination-entrance [entrance] of destination
+       while [destination-entrance = mynode] [set destination one-of patches with [pcolor = orange] set destination-entrance [entrance] of destination]
+
+       
+       ;;select shortest path
+       path-select      
+    ]
+  ]]
+  
+
+  
+  
+  ;;move along the path selected
+ ask people [
+    ifelse xcor != [xcor] of destination-entrance or ycor != [ycor] of destination-entrance [
+    move-to item step-in-path mypath
+    set step-in-path step-in-path + 1
+    ]
+   [ ;move-to destination 
+    set last-stop destination
+    set destination nobody set mynode destination-entrance set got_to_destination got_to_destination + 1]  ;;arrive and select new destination
+ ]
+ tick
+end
+
+to path-select
+     
+     ;;use the A-star algorithm to find the shortest path (shortest in terms of distance)
+     
+     set mypath [] set step-in-path 0
+     
+     ask vertices [set dist 99999 set done 0 set lastnode nobody set color brown]
+     
+
+     ask mynode [
+       set dist 0 ] ;;distance to original node is 0
+  
+
+    while [count vertices with [done = 0] > 0][   
+      ask vertices with [dist < 99999 and done = 0][
+         ask myneighbors [
+           let dist0 distance myself + [dist] of myself    ;;renew the shorstest distance to this point if it is smaller
+           if dist > dist0 [set dist dist0 set done 0 ;;done=0 if dist renewed, so that it will renew the dist of its neighbors
+             set lastnode myself]  ;;record the last node to reach here in the shortest path
+           ;set color red  ;;all roads searched will get red
+           ]  
+         set done 1  ;;set done 1 when it has renewed it neighbors
+      ]]
+     
+     ;print "Found path"
+     
+     
+     ;;put nodes in shortest path into a list
+     let x destination-entrance
+     
+     while [x != mynode] [
+       if show_path? [ask x [set color yellow] ] ;;highlight the shortest path
+       set mypath fput x mypath
+       set x [lastnode] of x ]
+     
+
+end
